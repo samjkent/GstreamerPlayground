@@ -1,0 +1,2 @@
+/home/sam/GstreamerPlayground/app/src/main/jni/Android.mk
+/home/sam/GstreamerPlayground/app/src/main/jni/Application.mk

@@ -1,0 +1,1 @@
+/home/sam/GstreamerPlayground/app/build/intermediates/cxx/Debug/15fz5n4c/obj/local/arm64-v8a
