@@ -55,6 +55,14 @@ android {
     }
 }
 
+task copyGStreamerAndroidLib(type: Copy) {
+  from "/opt/gstreamer-android/arm64/lib/"
+  into "$projectDir/src/main/jniLibs/arm64-v8a"
+  include "libgstreamer_android.so"
+}
+
+preBuild.dependsOn(copyGStreamerAndroidLib)
+
 dependencies {
 
     implementation libs.appcompat

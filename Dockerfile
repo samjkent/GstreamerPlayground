@@ -19,7 +19,7 @@ ENV PATH=$PATH:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/
 
 # Accept licenses and install required SDK packages (adjust API levels to your needs)
 RUN yes | sdkmanager --licenses && \
-    sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;25.2.9519653"  # Use an NDK version matching your project
+    sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;27.0.12077973"
 
 # 2️⃣ Download and install GStreamer Android prebuilt binaries
 ENV GSTREAMER_ROOT_ANDROID=/opt/gstreamer-android

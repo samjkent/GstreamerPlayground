@@ -13,7 +13,7 @@ GSTREAMER_ROOT            := $(GSTREAMER_ROOT_ANDROID)
 endif
 
 GSTREAMER_NDK_BUILD_PATH  := $(GSTREAMER_ROOT)/share/gst-android/ndk-build/
-GSTREAMER_PLUGINS         := coreelements ogg theora vorbis audioconvert audioresample playback soup opensles
+GSTREAMER_PLUGINS         := coreelements ogg theora vorbis audioconvert audioresample playback soup opensles androidmedia videoconvertscale opengl camerabin autodetect videofilter
 GSTREAMER_EXTRA_DEPS      := gstreamer-1.0 gstreamer-video-1.0
 
 include $(GSTREAMER_NDK_BUILD_PATH)/gstreamer-1.0.mk
