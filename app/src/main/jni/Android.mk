@@ -23,6 +23,6 @@ include $(CLEAR_VARS)
 LOCAL_MODULE    := native-lib
 LOCAL_SRC_FILES := native-lib.c
 LOCAL_SHARED_LIBRARIES := gstreamer_android
-LOCAL_LDLIBS := -landroid
+LOCAL_LDLIBS := -landroid -llog
 
 include $(BUILD_SHARED_LIBRARY)
