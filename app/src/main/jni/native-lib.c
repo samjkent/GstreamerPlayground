@@ -8,7 +8,8 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static GstElement *pipeline = NULL;
+static GstElement *pipeline_capture = NULL;
+static GstElement *pipeline_display = NULL;
 static GstElement *video_sink = NULL;
 static GMainLoop *main_loop = NULL;
 static GThread *main_loop_thread = NULL;
@@ -106,31 +107,6 @@ GstFlowReturn on_new_sample_from_sink(GstElement *appsink, gpointer user_data) {
 
   // Map output buffer writable
   GstMapInfo outmap;
-  if (gst_buffer_map(outbuf, &outmap, GST_MAP_WRITE)) {
-    // Draw a simple FPS overlay in the top-left corner in white
-    // Assuming RGBA format, draw pixels manually
-    const int width = 1280;
-    const int height = 720;
-    const int stride = width * 4;
-    const int box_w = 200, box_h = 40;
-
-    // Draw a white rectangle (simple indicator, not text rendering)
-    for (int y = 0; y < box_h; y++) {
-      if (y >= height)
-        break;
-      for (int x = 0; x < box_w; x++) {
-        if (x >= width)
-          break;
-        guint8 *pixel = &outmap.data[y * stride + x * 4];
-        pixel[0] = 255; // R
-        pixel[1] = 255; // G
-        pixel[2] = 255; // B
-        pixel[3] = 255; // A
-      }
-    }
-    gst_buffer_unmap(outbuf, &outmap);
-  }
-
   gst_buffer_unmap(buffer, &map);
 
   // Push buffer to appsrc
@@ -145,14 +121,19 @@ GstFlowReturn on_new_sample_from_sink(GstElement *appsink, gpointer user_data) {
 JNIEXPORT void JNICALL
 Java_com_example_gstreamerplayground_MainActivity_nativeStartPipeline(
     JNIEnv *env, jobject thiz, jobject surface) {
-  LOGD("nativeStartPipeline called");
+  // Stop existing pipelines if running
+  if (pipeline_capture) {
+    LOGD("Stopping existing capture pipeline.");
+    gst_element_set_state(pipeline_capture, GST_STATE_NULL);
+    gst_object_unref(pipeline_capture);
+    pipeline_capture = NULL;
+  }
 
-  // Stop existing pipeline if running
-  if (pipeline) {
-    LOGD("Pipeline already running. Stopping existing pipeline.");
-    gst_element_set_state(pipeline, GST_STATE_NULL);
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+  if (pipeline_display) {
+    LOGD("Stopping existing display pipeline.");
+    gst_element_set_state(pipeline_display, GST_STATE_NULL);
+    gst_object_unref(pipeline_display);
+    pipeline_display = NULL;
   }
 
   if (main_loop) {
@@ -171,98 +152,119 @@ Java_com_example_gstreamerplayground_MainActivity_nativeStartPipeline(
     native_window = NULL;
   }
 
-  // Create pipeline: ahcsrc → videoflip → appsink
-  pipeline = gst_parse_launch("ahcsrc ! video/x-raw,width=1280,height=720 ! "
-                              "videoflip method=clockwise ! videoscale ! "
-                              "videoconvert",
-                              NULL);
+  // ----------- Create CAPTURE pipeline: ahcsrc → videoflip → appsink
+  pipeline_capture =
+      gst_parse_launch("ahcsrc ! video/x-raw,width=1280,height=720 ! "
+                       "videoflip method=clockwise ! videoscale ! videoconvert "
+                       "! appsink name=custom_sink",
+                       NULL);
 
-  //  ! appsink name=custom_sink",
-
-  if (!pipeline) {
-    LOGE("Failed to create GStreamer upstream pipeline");
+  if (!pipeline_capture) {
+    LOGE("Failed to create capture pipeline");
     return;
   }
 
-  // Get appsink element from pipeline
-  appsink = gst_bin_get_by_name(GST_BIN(pipeline), "custom_sink");
+  appsink = gst_bin_get_by_name(GST_BIN(pipeline_capture), "custom_sink");
   if (!appsink) {
-    LOGE("Failed to get appsink from pipeline");
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+    LOGE("Failed to get appsink from capture pipeline");
+    gst_object_unref(pipeline_capture);
+    pipeline_capture = NULL;
     return;
   }
-
-  // Create downstream elements manually: appsrc → videoconvert → glimagesink
-  appsrc = gst_element_factory_make("appsrc", "custom_src");
 
   GstCaps *sink_caps =
       gst_caps_from_string("video/x-raw,format=RGBA,width=720,height=1280");
   g_object_set(appsink, "caps", sink_caps, "emit-signals", TRUE, "max-buffers",
                1, "drop", TRUE, NULL);
-  GstCaps *src_caps =
-      gst_caps_from_string("video/x-raw,format=RGBA,width=720,height=1280");
-  g_object_set(appsrc, "caps", src_caps, "emit-signals", TRUE, "format",
-               GST_FORMAT_TIME, "do-timestamp", TRUE, NULL);
-  gst_caps_unref(src_caps);
   gst_caps_unref(sink_caps);
 
+  // ----------- Create DISPLAY pipeline: appsrc → queue → videoconvert →
+  // glimagesink
+  pipeline_display = gst_pipeline_new("display_pipeline");
+  if (!pipeline_display) {
+    LOGE("Failed to create display pipeline");
+    gst_object_unref(pipeline_capture);
+    pipeline_capture = NULL;
+    return;
+  }
+
+  appsrc = gst_element_factory_make("appsrc", "custom_src");
+  GstElement *queue = gst_element_factory_make("queue", NULL);
   GstElement *videoconvert = gst_element_factory_make("videoconvert", NULL);
   video_sink = gst_element_factory_make("glimagesink", "videosink");
-  GstElement *queue = gst_element_factory_make("queue", NULL);
 
-  if (!appsrc || !videoconvert || !video_sink) {
-    LOGE("Failed to create downstream elements");
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+  if (!appsrc || !queue || !videoconvert || !video_sink) {
+    LOGE("Failed to create elements for display pipeline");
+    gst_object_unref(pipeline_capture);
+    gst_object_unref(pipeline_display);
+    pipeline_capture = NULL;
+    pipeline_display = NULL;
     return;
   }
 
-  // Add downstream elements to pipeline
-  gst_bin_add_many(GST_BIN(pipeline), queue, videoconvert, video_sink, NULL);
+  GstCaps *src_caps =
+      gst_caps_from_string("video/x-raw,format=RGBA,width=720,height=1280");
+  g_object_set(appsrc, "caps", src_caps, "emit-signals", FALSE, "format",
+               GST_FORMAT_TIME, "blocksize", 0, "is-live", TRUE, NULL);
+  gst_caps_unref(src_caps);
 
-  // Link downstream: appsrc → videoconvert → glimagesink
-  if (!gst_element_link_many(queue, videoconvert, video_sink, NULL)) {
-    LOGE("Failed to link downstream elements");
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+  gst_bin_add_many(GST_BIN(pipeline_display), appsrc, queue, videoconvert,
+                   video_sink, NULL);
+
+  if (!gst_element_link_many(appsrc, queue, videoconvert, video_sink, NULL)) {
+    LOGE("Failed to link elements in display pipeline");
+    gst_object_unref(pipeline_capture);
+    gst_object_unref(pipeline_display);
+    pipeline_capture = NULL;
+    pipeline_display = NULL;
     return;
   }
 
-  // Configure appsink to emit new-sample signals
-  // Connect appsink → appsrc bridge
+  // ----------- Connect appsink → appsrc bridge
   g_signal_connect(appsink, "new-sample", G_CALLBACK(on_new_sample_from_sink),
                    appsrc);
 
+  // ----------- Attach glimagesink to native window
   native_window = ANativeWindow_fromSurface(env, surface);
   if (!native_window) {
     LOGE("Failed to get ANativeWindow from surface");
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+    gst_object_unref(pipeline_capture);
+    gst_object_unref(pipeline_display);
+    pipeline_capture = NULL;
+    pipeline_display = NULL;
     return;
   }
-
-  // Attach GStreamer video output to Android native window
   gst_video_overlay_set_window_handle(GST_VIDEO_OVERLAY(video_sink),
                                       (guintptr)native_window);
 
-  // Add bus watch to handle errors/warnings/EOS
-  GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
-  gst_bus_add_watch(bus, bus_call, NULL);
-  gst_object_unref(bus);
+  // ----------- Add bus watches
+  GstBus *bus1 = gst_pipeline_get_bus(GST_PIPELINE(pipeline_capture));
+  gst_bus_add_watch(bus1, bus_call, NULL);
+  gst_object_unref(bus1);
 
-  // Start GLib main loop on a background thread
+  GstBus *bus2 = gst_pipeline_get_bus(GST_PIPELINE(pipeline_display));
+  gst_bus_add_watch(bus2, bus_call, NULL);
+  gst_object_unref(bus2);
+
+  // ----------- Start GLib main loop
   main_loop = g_main_loop_new(NULL, FALSE);
   main_loop_thread = g_thread_new("gstreamer_main_loop", main_loop_func, NULL);
 
-  // Start pipeline
-  GstStateChangeReturn ret;
-  ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
-  if (ret == GST_STATE_CHANGE_FAILURE) {
-    LOGE("Failed to set pipeline to PLAYING");
+  // ----------- Set both pipelines to PLAYING
+  if (gst_element_set_state(pipeline_capture, GST_STATE_PLAYING) ==
+      GST_STATE_CHANGE_FAILURE) {
+    LOGE("Failed to set capture pipeline to PLAYING");
     g_main_loop_quit(main_loop);
   } else {
-    LOGD("Pipeline set to PLAYING");
+    LOGD("Capture pipeline set to PLAYING");
+  }
+
+  if (gst_element_set_state(pipeline_display, GST_STATE_PLAYING) ==
+      GST_STATE_CHANGE_FAILURE) {
+    LOGE("Failed to set display pipeline to PLAYING");
+    g_main_loop_quit(main_loop);
+  } else {
+    LOGD("Display pipeline set to PLAYING");
   }
 }
 
@@ -271,10 +273,10 @@ Java_com_example_gstreamerplayground_MainActivity_nativeStopPipeline(
     JNIEnv *env, jobject thiz) {
   LOGD("nativeStopPipeline called");
 
-  if (pipeline) {
-    gst_element_set_state(pipeline, GST_STATE_NULL);
-    gst_object_unref(pipeline);
-    pipeline = NULL;
+  if (pipeline_capture) {
+    gst_element_set_state(pipeline_capture, GST_STATE_NULL);
+    gst_object_unref(pipeline_capture);
+    pipeline_capture = NULL;
   }
 
   if (main_loop) {
